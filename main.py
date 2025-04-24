@@ -1,10 +1,9 @@
-from fastapi import FastAPI # Add this import
+from fastapi import FastAPI
 import psycopg2
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg2.extras import RealDictCursor
 
 app = FastAPI()
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,11 +15,11 @@ app.add_middleware(
 
 def get_connection():
     return psycopg2.connect(
-        database="book_notes",
-        user="postgres",
-        password="lolypop0",
-        host="localhost",
-        port="5432"
+        database="book_notes",  # Hardcoded database name
+        user="postgres",        # Hardcoded database user
+        password="lolypop0",    # Hardcoded database password
+        host="localhost",       # Hardcoded database host
+        port="5432"             # Hardcoded database port
     )
 
 @app.get("/notes")
@@ -53,5 +52,4 @@ def search_notes(q: str):
     conn.close()
     return {"results": results}
 
-
-#uvicorn main:app --reload --port 8080
+# To run the app: uvicorn main:app --reload --port 8080
