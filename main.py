@@ -1,54 +1,64 @@
+from fastapi import FastAPI, Depends
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String, Text, Index
+from sqlalchemy.dialects.postgresql import TSVECTOR
 import os
-from fastapi import FastAPI
-import psycopg2
-from fastapi.middleware.cors import CORSMiddleware
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Connect to the PostgreSQL database
+DATABASE_URL = os.getenv("DATABASE_URL")  # Make sure this is set in your environment
+print("Connecting to database with URL:", DATABASE_URL)  # Debugging line
 
+# Initialize FastAPI
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://frontend-book-notes.vercel.app"],  # Allow React app to connect
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allow all headers
-)
+# Database setup
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-def get_connection():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+# Model
+class Note(Base):
+    __tablename__ = 'notes'
 
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True)
+    content = Column(Text)
+    search_vector = Column(TSVECTOR)
 
+    __table_args__ = (
+        Index('notes_search_idx', search_vector, postgresql_using='gin'),
+    )
 
+# Create the database tables (only needed once)
+Base.metadata.create_all(bind=engine)
+
+# Dependency to get the database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Endpoint to get all notes
 @app.get("/notes")
-def list_notes():
-    conn = get_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT note_id, title FROM notes ORDER BY note_id ASC;")
-    notes = cur.fetchall()
-    cur.close()
-    conn.close()
+def get_notes(db: Session = Depends(get_db)):
+    notes = db.query(Note).all()
     return notes
 
+# Endpoint to get a single note's content by ID
 @app.get("/notes/{note_id}")
-def get_note(note_id: int):
-    conn = get_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT note_id, title, content FROM notes WHERE note_id = %s;", (note_id,))
-    note = cur.fetchone()
-    cur.close()
-    conn.close()
-    return note
+def get_note_content(note_id: int, db: Session = Depends(get_db)):
+    note = db.query(Note).filter(Note.id == note_id).first()
+    if note is None:
+        return {"error": "Note not found"}
+    return {"content": note.content}
 
+# Search notes by query
 @app.get("/search")
-def search_notes(q: str):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT note_id, title FROM notes WHERE search_vector @@ plainto_tsquery(%s)", (q,))
-    results = [{"id": row[0], "title": row[1]} for row in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return {"results": results}
+def search_notes(q: str, db: Session = Depends(get_db)):
+    query = f"SELECT * FROM notes WHERE search_vector @@ to_tsquery(:q)"
+    result = db.execute(query, {'q': q}).fetchall()
+    return {"results": result}
