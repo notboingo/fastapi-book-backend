@@ -1,26 +1,24 @@
 from fastapi import FastAPI
 import psycopg2
-from fastapi.middleware.cors import CORSMiddleware
 from psycopg2.extras import RealDictCursor
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Load environment variables from .env
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Allow React app to connect
+    allow_origins=["http://localhost:3000"],  # Update later if needed
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 def get_connection():
-    return psycopg2.connect(
-        database="book_notes",  # Hardcoded database name
-        user="postgres",        # Hardcoded database user
-        password="lolypop0",    # Hardcoded database password
-        host="localhost",       # Hardcoded database host
-        port="5432"             # Hardcoded database port
-    )
+    return psycopg2.connect(os.getenv("postgresql://pgadmin_mrsk_user:MgrSF6CM1ybExuQWhBMHVCFLQH5CXmv5@dpg-d05caa24d50c73etcaj0-a.oregon-postgres.render.com/pgadmin_mrsk"))
 
 @app.get("/notes")
 def list_notes():
@@ -51,5 +49,3 @@ def search_notes(q: str):
     cur.close()
     conn.close()
     return {"results": results}
-
-# To run the app: uvicorn main:app --reload --port 8080
