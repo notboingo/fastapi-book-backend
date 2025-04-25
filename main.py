@@ -1,28 +1,26 @@
+import os
 from fastapi import FastAPI
 import psycopg2
-from psycopg2.extras import RealDictCursor
 from fastapi.middleware.cors import CORSMiddleware
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-import os
 
-load_dotenv()  # Load environment variables from .env
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Local frontend for development
-        "https://frontend-book-notes.vercel.app"  # Deployed frontend on Vercel
-    ],  
+    allow_origins=["http://localhost:3000", "https://frontend-book-notes.vercel.app"],  # Allow React app to connect
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
-
 def get_connection():
-    return psycopg2.connect(os.getenv("postgresql://pgadmin_mrsk_user:MgrSF6CM1ybExuQWhBMHVCFLQH5CXmv5@dpg-d05caa24d50c73etcaj0-a.oregon-postgres.render.com/pgadmin_mrsk"))
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    return conn
 
 @app.get("/notes")
 def list_notes():
