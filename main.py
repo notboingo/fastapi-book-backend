@@ -11,11 +11,15 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Update later if needed
+    allow_origins=[
+        "http://localhost:3000",  # Local frontend for development
+        "https://frontend-book-notes.vercel.app"  # Deployed frontend on Vercel
+    ],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 def get_connection():
     return psycopg2.connect(os.getenv("postgresql://pgadmin_mrsk_user:MgrSF6CM1ybExuQWhBMHVCFLQH5CXmv5@dpg-d05caa24d50c73etcaj0-a.oregon-postgres.render.com/pgadmin_mrsk"))
