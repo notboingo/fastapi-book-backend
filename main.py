@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 def get_connection():
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    conn = psycopg2.connect(os.getenv("postgresql://pgadmin_mrsk_user:MgrSF6CM1ybExuQWhBMHVCFLQH5CXmv5@dpg-d05caa24d50c73etcaj0-a/pgadmin_mrsk"))
     return conn
 
 @app.get("/notes")
