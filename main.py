@@ -7,8 +7,6 @@ from psycopg2.pool import SimpleConnectionPool
 import time
 
 app = FastAPI()
-
-# ----- CORS (tighten allow_origins later) -----
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,81 +15,82 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ======== YOUR CURRENT CREDS (kept as requested) ========
+# ======= your current credentials (as you requested) =======
 DB_NAME = "pgadmin_mrsk"
 DB_USER = "pgadmin_mrsk_user"
 DB_PASSWORD = "MgrSF6CM1ybExuQWhBMHVCFLQH5CXmv5"
-DB_HOST = "dpg-d05caa24d50c73etcaj0-a.oregon-postgres.render.com"
+DB_HOST_EXTERNAL = "dpg-d05caa24d50c73etcaj0-a.oregon-postgres.render.com"  # external hostname
+DB_HOST_INTERNAL = "dpg-d05caa24d50c73etcaj0-a"  # internal host (same prefix, no domain)
 DB_PORT = "5432"
-# ========================================================
+# ===========================================================
 
-# Build a DSN with SSL required
-DSN = (
-    f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} "
-    f"host={DB_HOST} port={DB_PORT} sslmode=require"
-)
+def dsn_internal():
+    # Internal URL is reachable only from Render services in the same region.
+    # It typically does NOT use SSL.
+    return (
+        f"host={DB_HOST_INTERNAL} port={DB_PORT} "
+        f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} "
+        f"sslmode=disable"
+    )
 
-# Global pool
+def dsn_external():
+    # External URL requires SSL
+    return (
+        f"host={DB_HOST_EXTERNAL} port={DB_PORT} "
+        f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} "
+        f"sslmode=require"
+    )
+
 POOL: SimpleConnectionPool | None = None
 
+def try_make_pool(dsn: str) -> SimpleConnectionPool:
+    pool = SimpleConnectionPool(
+        minconn=1,
+        maxconn=10,
+        dsn=dsn,
+        connect_timeout=5,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
+    )
+    # pre-warm
+    conn = pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1;")
+    finally:
+        pool.putconn(conn)
+    return pool
 
-def init_pool_with_retry(tries: int = 3, delay_sec: float = 0.8):
-    """
-    Initialize a small connection pool.
-    Retries help ride out brief DB restarts / cold starts.
-    """
-    global POOL
+def init_pool_with_fallback():
+    # 1) Try internal (no SSL) for in-Render connectivity
+    # 2) Fallback to external (SSL) if internal is not reachable
     last_err = None
-    for _ in range(tries):
+    for dsn in (dsn_internal(), dsn_external()):
         try:
-            POOL = SimpleConnectionPool(
-                minconn=1,
-                maxconn=10,
-                dsn=DSN,
-                connect_timeout=5,
-                keepalives=1,
-                keepalives_idle=30,
-                keepalives_interval=10,
-                keepalives_count=3,
-            )
-            # Pre-warm one connection so we fail fast if DB is unreachable
-            conn = POOL.getconn()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1;")
-                return  # success
-            finally:
-                POOL.putconn(conn)
+            return try_make_pool(dsn)
         except Exception as e:
             last_err = e
-            time.sleep(delay_sec)
-    # If we reach here, pool init failed after retries
+            time.sleep(0.6)
     raise last_err
 
-
 def get_conn():
-    """
-    Get a pooled connection and 'pre-ping' it.
-    If the pool hands us a dead connection (after provider drops idles),
-    replace it with a fresh one.
-    """
     assert POOL is not None, "DB pool not initialized"
     conn = POOL.getconn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1;")  # pre-ping validates socket
+            cur.execute("SELECT 1;")  # pre-ping
         return conn
     except Exception:
         try:
             conn.close()
         except Exception:
             pass
-        # Try once more: get a brand new connection from the pool
         conn2 = POOL.getconn()
         with conn2.cursor() as cur:
             cur.execute("SELECT 1;")
         return conn2
-
 
 def put_conn(conn):
     try:
@@ -103,58 +102,47 @@ def put_conn(conn):
         except Exception:
             pass
 
-
 @app.on_event("startup")
 def on_startup():
-    init_pool_with_retry()
-
+    global POOL
+    POOL = init_pool_with_fallback()
 
 @app.on_event("shutdown")
 def on_shutdown():
     global POOL
-    if POOL is not None:
+    if POOL:
         POOL.closeall()
         POOL = None
 
-
-# ---------- Health endpoints ----------
 @app.get("/healthz")
 def healthz():
-    # Simple health: doesn't touch DB
     return {"ok": True}
-
 
 @app.get("/dbhealth")
 def dbhealth():
     try:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute("SELECT now();")
-            ts = cur.fetchone()[0]
+            cur.execute("select inet_server_addr(), version();")
+            host_ip, ver = cur.fetchone()
         put_conn(conn)
-        return {"db_ok": True, "time": str(ts)}
+        return {"db_ok": True, "server_ip": str(host_ip), "version": ver}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"DB not reachable: {e}")
 
-
-# ---------- App endpoints ----------
 @app.get("/notes")
 def list_notes():
     try:
         conn = get_conn()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT note_id, title FROM notes ORDER BY note_id ASC;"
-            )
+            cur.execute("SELECT note_id, title FROM notes ORDER BY note_id ASC;")
             rows = cur.fetchall()
         put_conn(conn)
         return {"notes": rows}
     except psycopg2.OperationalError:
-        # Typical when provider restarts / SSL session closed
         raise HTTPException(status_code=503, detail="Database temporarily unavailable")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/notes/{note_id}")
 def get_note(note_id: int):
@@ -174,7 +162,6 @@ def get_note(note_id: int):
         raise HTTPException(status_code=503, detail="Database temporarily unavailable")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/search")
 def search_notes(q: str):
